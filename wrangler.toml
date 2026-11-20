@@ -11,7 +11,7 @@ crons = ["0 6 * * *", "20 * * * *", "*/5 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "gestor-extraia"
-database_id = "<id devolvido ao criar o banco D1 gestor-extraia>"
+database_id = "f6aa94bf-7268-4cdf-9a39-880bec765b8b"
 migrations_dir = "migrations"
 
 # Criativos: navegador para renderizar HTML → PNG e bucket para guardar as imagens.
