@@ -3,6 +3,7 @@ name = "gestor-extraia"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 workers_dev = true
+preview_urls = false
 
 # 03:00 de Brasília (06:00 UTC): coleta + regras + time. Nas outras horas, só o Vigia.
 [triggers]
@@ -32,11 +33,11 @@ enabled = true
 
 [vars]
 # Endereço público do Worker (o wrangler/Cloudflare imprime o endereço workers.dev no 1º deploy).
-APP_URL = "https://gestor-extraia.<sua-conta>.workers.dev"
+APP_URL = "https://gestor-extraia.vtdopix29.workers.dev"
 # Meta: preenchidos na fase do Meta (mais pra frente). Até lá ficam vazios e o time roda em sombra lendo o histórico.
-META_AD_ACCOUNT_ID = "<id da conta de anúncios>"
-META_PAGE_ID = "<id da página do Facebook>"
-META_ADSET_CRIADOR_ID = "<id do conjunto de anúncios de teste>"
+META_AD_ACCOUNT_ID = ""
+META_PAGE_ID = ""
+META_ADSET_CRIADOR_ID = ""
 META_CAPI_ATIVO = "false"
 META_DATASET_ID = ""
 META_TEST_EVENT_CODE = ""
