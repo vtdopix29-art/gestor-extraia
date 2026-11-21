@@ -13,6 +13,7 @@ import { llmAtivo, resumoLlm } from "./llm.ts";
 import { lerConta } from "../analista.ts";
 import { listarCriativos, rodarCriador } from "./criador.ts";
 import { atualizarPaginas } from "./paginas.ts";
+import type { LerRenderizada } from "./paginas.ts";
 import { listarAlertas, rodarVigia } from "./vigia.ts";
 import type { VigiaEnv } from "./vigia.ts";
 import { lerPlanoAtual, rodarEstrategista } from "./estrategista.ts";
@@ -66,7 +67,7 @@ export async function registrarExecucao(db: D1Database, x: { agente: string; dia
     .run();
 }
 
-export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fetchFn: typeof fetch = fetch, agora = new Date(), renderPng?: RenderPng, renderWebm?: RenderWebm): Promise<Record<string, unknown>> {
+export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fetchFn: typeof fetch = fetch, agora = new Date(), renderPng?: RenderPng, renderWebm?: RenderWebm, lerRenderizada?: LerRenderizada): Promise<Record<string, unknown>> {
   const dia = diaBrt(agora);
   const estado = await lerEstado(env.DB);
   const out: Record<string, unknown> = { dia, estado };
@@ -136,7 +137,7 @@ export async function rodarEquipe(env: EquipeEnv, gatilho: "cron" | "manual", fe
   else {
     try {
       // landing pages: só as vencidas gastam modelo; erro aqui não impede o criador
-      try { out.paginas = await atualizarPaginas(env, fetchFn, agora); } catch (e) { out.paginas = { erro: String(e) }; }
+      try { out.paginas = await atualizarPaginas(env, fetchFn, agora, false, lerRenderizada); } catch (e) { out.paginas = { erro: String(e) }; }
       const c = await rodarCriador(env, estado.criador?.nivel ?? 0, { renderPng, renderWebm, fetchFn, agora });
       if (c.bloqueado) out.criador = { pulado: c.bloqueado };
       else {

@@ -39,3 +39,16 @@ export async function renderizarWebm(browser: BrowserWorker, html: string, largu
     await b.close();
   }
 }
+
+/** Abre uma página pública e devolve o título + o texto visível depois do JavaScript rodar. */
+export async function textoRenderizado(browser: BrowserWorker, url: string): Promise<string> {
+  const b = await puppeteer.launch(browser);
+  try {
+    const page = await b.newPage();
+    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
+    await page.goto(url, { waitUntil: "networkidle0", timeout: 45_000 });
+    return (await page.evaluate("(document.title || '') + '\\n' + (document.body ? document.body.innerText : '')")) as string;
+  } finally {
+    await b.close();
+  }
+}

@@ -41,7 +41,7 @@ import { atualizarPaginas, lerResumos } from "./agentes/paginas.ts";
 import { rodarEstrategista } from "./agentes/estrategista.ts";
 import { rodarRelator } from "./agentes/relator.ts";
 import { rodarPublicos } from "./agentes/publicos.ts";
-import { renderizarPng, renderizarWebm } from "./agentes/render.ts";
+import { renderizarPng, renderizarWebm, textoRenderizado } from "./agentes/render.ts";
 import { diaBrt } from "./anuncios.ts";
 import { importarCsv } from "./fontes/pagamento.ts";
 import { receberWebhook, resumoIngestao } from "./fontes/ingestao.ts";
@@ -101,6 +101,7 @@ function bearerOk(request: Request, token: string | undefined, url: URL): boolea
   return dado.length > 0 && timingSafeEqual(dado, token);
 }
 const renderDe = (env: Env) => (env.BROWSER ? (html: string, l: number, a: number) => renderizarPng(env.BROWSER!, html, l, a) : undefined);
+const lerPaginaDe = (env: Env) => (env.BROWSER ? (u: string) => textoRenderizado(env.BROWSER!, u) : undefined);
 const renderWebmDe = (env: Env) => (env.BROWSER ? (html: string, l: number, a: number, s: number) => renderizarWebm(env.BROWSER!, html, l, a, s) : undefined);
 
 /** Depois de um webhook: manda os eventos dos clientes tocados (em segundo plano). */
@@ -120,7 +121,7 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
   if (path === "/admin/analista/rodar" && method === "POST") return json(await rodarAnalista(env));
   if (path === "/admin/agentes" && method === "GET") return json(await painelAgentes(env));
   if (path === "/admin/agentes/dossie" && method === "GET") return json(await montarDossie(env.DB));
-  if (path === "/admin/agentes/rodar" && method === "POST") return json(await rodarEquipe(env, "manual", fetch, new Date(), renderDe(env), renderWebmDe(env)));
+  if (path === "/admin/agentes/rodar" && method === "POST") return json(await rodarEquipe(env, "manual", fetch, new Date(), renderDe(env), renderWebmDe(env), lerPaginaDe(env)));
   if (path === "/admin/agentes/estado" && method === "PUT") {
     const agente = url.searchParams.get("agente");
     if (!agente || !/^[a-z]+$/.test(agente)) throw new HttpError(400, "informe ?agente=<nome>&nivel=0|1|2&parado=0|1");
@@ -172,7 +173,7 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
     return json(r, r.ok ? 200 : 400);
   }
   if (path === "/admin/paginas" && method === "GET") return json({ paginas: await lerResumos(env.DB) });
-  if (path === "/admin/paginas/atualizar" && method === "POST") return json({ resultado: await atualizarPaginas(env, fetch, new Date(), url.searchParams.get("forcar") === "1") });
+  if (path === "/admin/paginas/atualizar" && method === "POST") return json({ resultado: await atualizarPaginas(env, fetch, new Date(), url.searchParams.get("forcar") === "1", lerPaginaDe(env)) });
   if (path === "/admin/pagamento/importar" && method === "POST") {
     const tabela = url.searchParams.get("tabela");
     if (tabela !== "clientes" && tabela !== "pagamentos") throw new HttpError(400, "informe ?tabela=clientes ou ?tabela=pagamentos e o CSV no corpo");
@@ -282,7 +283,7 @@ export default {
         if (metaGastoAtivo(env)) await varrerGasto(env);
         if (eventosAtivos(env)) await varrerEventos(env);
         await rodarAnalista(env);
-        await rodarEquipe(env, "cron", fetch, new Date(), renderDe(env), renderWebmDe(env));
+        await rodarEquipe(env, "cron", fetch, new Date(), renderDe(env), renderWebmDe(env), lerPaginaDe(env));
       })());
     } else if (event.cron === "*/5 * * * *") {
       // termina a publicação dos vídeos que esperam a Meta processar (sem nada pendente, é uma consulta só)

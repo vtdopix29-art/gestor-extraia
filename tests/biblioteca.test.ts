@@ -162,3 +162,18 @@ test("montarBiblioteca: bases numa conta de exemplo (campeão, segundo, pouco ga
     ["PrintPreco_4x5_Cta", 3071],
   ]);
 });
+
+test("atualizarPaginas: página montada por JavaScript é lida pelo navegador", async () => {
+  const { db } = banco();
+  const env = { DB: db, OPENROUTER_API_KEY: "or", CRIADOR_PAGINAS: "https://spa.test/" };
+  const fetchFalso = (async (url: string) => {
+    if (url.includes("openrouter")) return new Response(JSON.stringify({ model: "anthropic/claude-haiku-5.5", choices: [{ message: { content: JSON.stringify({ promessa_principal: "Descubra a IA certa", beneficios: [], provas: [], preco: "grátis", chamada: "Fazer o quiz", publico: "iniciantes" }) } }], usage: { cost: 0.001 } }));
+    return new Response('<html><title>Quiz</title><body><div id="root"></div><script src="/app.js"></script></body></html>', { status: 200 });
+  }) as unknown as typeof fetch;
+  const semNavegador = await atualizarPaginas(env, fetchFalso, AGORA);
+  assert.match(semNavegador[0].resultado, /sem texto suficiente/);
+  const urls: string[] = [];
+  const comNavegador = await atualizarPaginas(env, fetchFalso, AGORA, true, async (u) => { urls.push(u); return "Quiz\n" + "Responda 5 perguntas e descubra a IA certa pra você. ".repeat(6); });
+  assert.equal(comNavegador[0].resultado, "resumida");
+  assert.deepEqual(urls, ["https://spa.test/"]);
+});

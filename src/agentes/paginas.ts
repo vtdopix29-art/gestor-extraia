@@ -74,7 +74,10 @@ export async function lerResumos(db: D1Database): Promise<Array<{ url: string; r
 }
 
 /** Atualiza as páginas vencidas (ou todas, com `forcar`). Devolve o que fez com cada uma. */
-export async function atualizarPaginas(env: PaginasEnv, fetchFn: typeof fetch = fetch, agora = new Date(), forcar = false): Promise<Array<{ url: string; resultado: string }>> {
+/** Abre a URL num navegador de verdade e devolve o texto visível (para páginas montadas por JavaScript). */
+export type LerRenderizada = (url: string) => Promise<string>;
+
+export async function atualizarPaginas(env: PaginasEnv, fetchFn: typeof fetch = fetch, agora = new Date(), forcar = false, lerRenderizada?: LerRenderizada): Promise<Array<{ url: string; resultado: string }>> {
   const out: Array<{ url: string; resultado: string }> = [];
   const atuais = new Map((await lerResumos(env.DB)).map((p) => [p.url, p]));
   for (const url of urlsConfiguradas(env)) {
@@ -85,7 +88,12 @@ export async function atualizarPaginas(env: PaginasEnv, fetchFn: typeof fetch = 
       const res = await fetchFn(url, { headers: { accept: "text/html", "user-agent": "Mozilla/5.0 (compatible; GestorTrafegoIA/1.0)" }, redirect: "follow" });
       const html = await res.text();
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const texto = extrairTexto(html);
+      let texto = extrairTexto(html);
+      // Página montada por JavaScript (Netlify/React etc.): o HTML cru quase não tem texto. Abre no navegador.
+      if (texto.length < 200 && lerRenderizada) {
+        const visivel = (await lerRenderizada(url)).replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim().slice(0, PAGINA_TEXTO_MAX);
+        if (visivel.length > texto.length) texto = visivel;
+      }
       if (texto.length < 200) throw new Error("página sem texto suficiente");
       const hash = await sha256Hex(texto);
       const velho = await env.DB.prepare("SELECT texto_hash FROM paginas_resumo WHERE url = ?1").bind(url).first<{ texto_hash: string }>();
