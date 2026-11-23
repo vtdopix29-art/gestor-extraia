@@ -49,10 +49,10 @@ APP_URL = "https://gestor-atendimento.vtdopix29.workers.dev"
 # do Vigia, do Analista e do Gestor. Mais tarde o Atendimento Pronto ganha conta própria: troca o id e pronto.
 META_AD_ACCOUNT_ID = "936746025890958"
 META_CAMPANHA_PREFIXO = "AP ·"
-# Página do Facebook do Atendimento Pronto (com o @atendimento.pronto ligado). A conta só tem a página da Glowhaven.
-META_PAGE_ID = ""
+# Página do Facebook "Atendimento Pronto Nail Designer" (criada em 23/11, com o @atendimento.pronto ligado; no portfólio da Glowhaven por enquanto).
+META_PAGE_ID = "1415339488333989"
 # Perfil do Instagram dos anúncios (@atendimento.pronto). Vazio = o Worker pergunta à Meta qual perfil está ligado à página.
-META_IG_USER_ID = ""
+META_IG_USER_ID = "17841467346263299"
 META_ADSET_CRIADOR_ID = ""
 META_CAPI_ATIVO = "false"
 META_DATASET_ID = ""
