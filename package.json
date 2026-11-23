@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "check": "npm run typecheck && npm test",
-    "migrate:local": "wrangler d1 migrations apply gestor-extraia --local",
-    "migrate:remote": "wrangler d1 migrations apply gestor-extraia --remote",
+    "migrate:local": "wrangler d1 migrations apply DB --local",
+    "migrate:remote": "wrangler d1 migrations apply DB --remote",
     "logo": "node scripts/logo.mjs",
     "tail": "wrangler tail"
   },

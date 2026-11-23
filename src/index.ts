@@ -12,6 +12,7 @@
  *   GET  /painel                                   negócio, time, criativos (com aprovação), plano, relatório, alertas
  *   GET  /painel/criativos/<id>.png|.webm|-capa.png|-story.webm|-story-capa.png · /painel/referencias/[mini/]<id>.jpg
  *   POST /painel/criativos/<id>/(publicar|reprovar|melhorar)   formulário do painel
+ *   POST /painel/teste/(montar|ativar|pausar)      teste pago do Atendimento Pronto (ativar só com a frase "pode ativar")
  * Administração (Authorization: Bearer ADMIN_TOKEN):
  *   POST /admin/anuncios/varrer[?dias=7] · GET /admin/anuncios · GET /admin/analista · POST /admin/analista/rodar
  *   GET  /admin/agentes · /dossie · POST /admin/agentes/rodar · PUT /admin/agentes/estado?agente=&nivel=&parado=
@@ -24,6 +25,7 @@
  *   POST /admin/pagamento/importar?tabela=clientes|pagamentos (CSV) · GET /admin/ingestao
  *   GET  /admin/eventos · POST /admin/eventos/varrer · GET /admin/metricas
  *   GET  /admin/usuarios · POST /admin/usuarios {email,nome,papel}
+ *   GET  /admin/teste · POST /admin/teste/montar · POST /admin/teste/ativar?frase=pode%20ativar · POST /admin/teste/pausar
  *
  * Cron: "0 6 * * *" (03:00 de Brasília): coleta, eventos atrasados, regras e o time; "20 * * * *": só o Vigia.
  */
@@ -51,12 +53,15 @@ import { CORS, receberLead, scriptCaptura } from "./captura.ts";
 import { criarUsuario, listarUsuarios, normalizarEmail, paginaEntrar, rotasLogin, sessaoDoPedido } from "./login.ts";
 import type { Quem } from "./login.ts";
 import { paginaPainel } from "./painel.ts";
+import { ativarTeste, continuarMontagem, montarTeste, pausarTeste, resumoTeste } from "./teste_ap.ts";
 import { clampInt, json, timingSafeEqual } from "./util.ts";
 
 export interface Env {
   DB: D1Database;
   BROWSER?: BrowserWorker;
   CRIATIVOS?: R2Bucket;
+  /** publico/ (os criativos do teste pago do Atendimento Pronto). */
+  ASSETS?: Fetcher;
   EMAIL?: { send(m: { to: string; from: string | { email: string; name: string }; subject: string; html: string; text: string }): Promise<{ messageId: string }> };
   ADMIN_TOKEN?: string;
   APP_URL?: string;
@@ -68,6 +73,7 @@ export interface Env {
   META_ADS_TOKEN?: string;
   META_AD_ACCOUNT_ID?: string;
   META_PAGE_ID?: string;
+  META_IG_USER_ID?: string;
   META_ADSET_CRIADOR_ID?: string;
   // Meta: eventos (API de Conversões)
   META_CAPI_ATIVO?: string;
@@ -194,6 +200,10 @@ async function admin(path: string, request: Request, url: URL, env: Env): Promis
     await criarUsuario(env.DB, { email, nome, papel: c.papel === "leitor" ? "leitor" : "admin", por: "token de administrador" });
     return json({ ok: true, usuarios: await listarUsuarios(env.DB) });
   }
+  if (path === "/admin/teste" && method === "GET") return json(await resumoTeste(env.DB));
+  if (path === "/admin/teste/montar" && method === "POST") return json(await montarTeste(env));
+  if (path === "/admin/teste/ativar" && method === "POST") return json(await ativarTeste(env, url.searchParams.get("frase") ?? "", "token de administrador"));
+  if (path === "/admin/teste/pausar" && method === "POST") return json(await pausarTeste(env));
   const midia = /^\/admin\/criativos\/(\d+)((?:-story)?(?:-capa)?)\.(png|webm)$/.exec(path);
   if (midia && method === "GET") return midiaCriativo(env, midia[1], midia[2] ?? "", midia[3]);
   throw new HttpError(404, "não encontrado");
@@ -247,7 +257,7 @@ export default {
         const q = url.searchParams.get("token") ? `?token=${encodeURIComponent(url.searchParams.get("token")!)}` : "";
         if (path === "/painel" && request.method === "GET") {
           const [p, m] = await Promise.all([painelAgentes(env), lerMetricas(env.DB)]);
-          const extras = { eventos: await resumoEventos(env.DB), eventos_ativos: eventosAtivos(env), ingestao: await resumoIngestao(env.DB) };
+          const extras = { eventos: await resumoEventos(env.DB), eventos_ativos: eventosAtivos(env), ingestao: await resumoIngestao(env.DB), teste: await resumoTeste(env.DB) };
           return new Response(paginaPainel(p, m, extras, quem, q), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
         }
         const imgAnuncio = /^\/painel\/referencias\/((?:mini\/)?\d{6,30})\.(jpg|png|webp)$/.exec(path);
@@ -264,6 +274,15 @@ export default {
           const feedback = String(form?.get("feedback") ?? "");
           const r = await acaoCriativo(env, Number(acao[1]), acao[2] as AcaoCriativo, feedback, quem.email, { renderPng: renderDe(env), renderWebm: renderWebmDe(env) });
           return Response.redirect(`${url.origin}/painel${q}${q ? "&" : "?"}aviso=${encodeURIComponent(r.mensagem)}#criativos`, 303);
+        }
+        const teste = /^\/painel\/teste\/(montar|ativar|pausar)$/.exec(path);
+        if (teste && request.method === "POST") {
+          const volta = (m: string) => Response.redirect(`${url.origin}/painel${q}${q ? "&" : "?"}aviso=${encodeURIComponent(m)}#teste`, 303);
+          if (quem.papel !== "admin") return volta("Só um administrador do painel pode mexer no teste pago.");
+          if (teste[1] === "montar") return volta((await montarTeste(env)).mensagem);
+          if (teste[1] === "pausar") return volta((await pausarTeste(env)).mensagem);
+          const form = await request.formData().catch(() => null);
+          return volta((await ativarTeste(env, String(form?.get("frase") ?? ""), quem.email)).mensagem);
         }
         throw new HttpError(404, "não encontrado");
       }
@@ -287,7 +306,7 @@ export default {
       })());
     } else if (event.cron === "*/5 * * * *") {
       // termina a publicação dos vídeos que esperam a Meta processar (sem nada pendente, é uma consulta só)
-      ctx.waitUntil(concluirPublicacoes(env).then(() => undefined));
+      ctx.waitUntil(Promise.all([concluirPublicacoes(env), continuarMontagem(env)]).then(() => undefined));
     } else {
       ctx.waitUntil(rodarVigiaHorario(env));
     }

@@ -8,6 +8,9 @@ import { EMPRESA } from "./config/negocio.ts";
 import { STATUS_EM_CIRCULACAO } from "./agentes/criador.ts";
 import type { Metricas } from "./metricas.ts";
 import type { Quem } from "./login.ts";
+import type { ResumoTeste } from "./teste_ap.ts";
+import { FRASE_ATIVAR } from "./teste_ap.ts";
+import { LIMITES } from "./config/negocio.ts";
 
 const esc = (v: unknown): string => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string);
 const reais = (c: unknown): string => (c == null ? "—" : `R$ ${(Number(c) / 100).toFixed(2).replace(".", ",")}`);
@@ -15,7 +18,32 @@ const pct = (v: unknown): string => (v == null ? "—" : `${String(v).replace(".
 const ROT_NIVEL = ["só lê", "sombra", "executa"];
 const mesBr = (m: string): string => { const [a, mm] = m.split("-"); return `${["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number(mm) - 1]}/${a.slice(2)}`; };
 
-export interface ExtrasPainel { eventos: { por_status: Array<Record<string, unknown>>; ultimos_erros: Array<Record<string, unknown>> }; eventos_ativos: boolean; ingestao: { ultimos: Array<Record<string, unknown>>; clientes: number; pagamentos: number; com_clique: number } }
+export interface ExtrasPainel { eventos: { por_status: Array<Record<string, unknown>>; ultimos_erros: Array<Record<string, unknown>> }; eventos_ativos: boolean; ingestao: { ultimos: Array<Record<string, unknown>>; clientes: number; pagamentos: number; com_clique: number }; teste?: ResumoTeste }
+
+const ROT_TESTE: Record<string, [string, string]> = {
+  novo: ["não montado", ""], aguardando_video: ["esperando a Meta processar o vídeo", "atencao"], pausado: ["montado e pausado", "atencao"],
+  ativo: ["no ar", "bom"], terminou: ["terminou", ""], erro: ["erro", "ruim"],
+};
+
+/** Cartão do teste pago do Atendimento Pronto: cada criativo, o que gastou, e os botões montar / ativar / pausar. */
+export function cartaoTeste(t: ResumoTeste | undefined, quem: Quem, q: string): string {
+  if (!t) return "";
+  const tetoVigia = Math.round(LIMITES.TETO_DIARIO_CENTS * 1.05);
+  const linhas = t.linhas.map((l) => {
+    const [rot, cls] = ROT_TESTE[l.estado] ?? [l.estado, ""];
+    return `<tr><td>${esc(l.nome)}${l.campanha_id ? `<br><span class="mono">campanha ${esc(l.campanha_id)}</span>` : ""}</td><td><span class="tag ${cls}">${esc(rot)}</span>${l.estado === "ativo" && l.fim ? `<br><span class="mono">até ${esc(new Date(l.fim).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }))}</span>` : ""}${l.erro ? `<br><span class="mono">${esc(l.erro)}</span>` : ""}</td><td class="n">${reais(l.gasto_cents)}</td><td class="n">${l.cliques}</td><td class="n">${l.impressoes.toLocaleString("pt-BR")}</td><td class="mono">${esc(l.link.replace(/^https:\/\//, ""))}</td></tr>`;
+  }).join("");
+  const admin = quem.papel === "admin";
+  const montar = admin && !t.ativo && !t.pronto_para_ativar ? `<form method="post" action="/painel/teste/montar${q}"><button class="b3">Montar as campanhas pausadas</button></form>` : "";
+  const ativar = admin && t.pronto_para_ativar ? `<form method="post" action="/painel/teste/ativar${q}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><input name="frase" placeholder="digite: ${esc(FRASE_ATIVAR)}" autocomplete="off" style="border:1px solid #c9d4ce;border-radius:8px;padding:8px;font:inherit;font-size:13px;min-width:0"><button class="b1">Ativar o teste</button></form><p class="sub" style="margin:6px 0 0">Ao ativar: começa em 2 minutos e termina sozinho em 3 dias, no máximo ${reais(t.maximo_cents)} mais o imposto da Meta. O Vigia passa a pausar de verdade se o gasto do dia passar de ${reais(tetoVigia)}; o Analista continua só sugerindo.</p>` : "";
+  const pausar = admin && t.ativo ? `<form method="post" action="/painel/teste/pausar${q}"><button class="b2">Pausar o teste</button></form>` : "";
+  return `<section class="cartao" id="teste"><h2>Teste pago: 3 criativos, até ${reais(t.maximo_cents)} mais imposto</h2>
+<p class="sub">Cada criativo é uma campanha de Tráfego só no Instagram, para nail designers no Brasil (mulheres de 20 a 45 anos, interesses de unha), com orçamento total de ${reais(t.linhas.length ? t.maximo_cents / t.linhas.length : 0)} por 3 dias. A Meta nunca passa do total. O site não tem pixel: as vendas e os catálogos por origem vêm do painel do site e da Kiwify.</p>
+<table><tr><th>Criativo</th><th>Situação</th><th class="n">Gasto</th><th class="n">Cliques</th><th class="n">Impressões</th><th>Link</th></tr>${linhas}
+<tr><td><b>Total</b></td><td></td><td class="n"><b>${reais(t.gasto_total_cents)}</b></td><td class="n">${t.linhas.reduce((s, l) => s + l.cliques, 0)}</td><td class="n">${t.linhas.reduce((s, l) => s + l.impressoes, 0).toLocaleString("pt-BR")}</td><td></td></tr></table>
+${montar || ativar || pausar ? `<div class="acoes" style="flex-direction:column;align-items:flex-start">${montar}${ativar}${pausar}</div>` : ""}
+</section>`;
+}
 
 export function paginaPainel(p: Record<string, unknown>, m: Metricas, x: ExtrasPainel, quem: Quem, q: string): string {
   const estado = (p.estado ?? {}) as Record<string, { nivel: number; parado: boolean }>;
@@ -60,6 +88,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px 8px;b
 <h1>${esc(EMPRESA)} · painel</h1><p class="sub">${parado ? "<b>PARADO.</b> " : ""}${esc(quem.nome)} · Modelo: ${p.llm_configurado ? "ligado" : "sem chave"} · Escrita na Meta: ${p.meta_escrita_configurada ? "ligada" : "sem token"} · Eventos para a Meta: ${x.eventos_ativos ? "ligados" : "desligados"} · Modelos nas últimas 24 h: US$ ${Number(modelos?.custo_24h_usd ?? 0).toFixed(3)}${q ? "" : ' · <a href="#" onclick="fetch(\'/auth/sair\',{method:\'POST\'}).then(function(){location.href=\'/entrar\'});return false">sair</a>'}</p>
 ${parado ? '<div class="aviso">O botão de parar está acionado: nenhum agente roda. Para retomar: <span class="mono">PUT /admin/agentes/estado?agente=todos&amp;parado=0</span></div>' : ""}
 <div id="aviso-url"></div>
+${cartaoTeste(x.teste, quem, q)}
 
 <section class="cartao"><h2>Negócio</h2>
 <div class="kpis"><div class="kpi"><b>${m.hoje.ativos}</b><span>clientes ativos</span></div><div class="kpi"><b>${reais(m.hoje.mrr_cents)}</b><span>receita recorrente (MRR)</span></div><div class="kpi"><b>${m.hoje.novos_30d}</b><span>clientes novos, 30 dias</span></div><div class="kpi"><b>${m.hoje.entradas_30d}</b><span>entradas no pagamento, 30 dias</span></div><div class="kpi"><b>${pct(m.hoje.conversao_30d_pct)}</b><span>entradas que viraram cliente</span></div></div>
