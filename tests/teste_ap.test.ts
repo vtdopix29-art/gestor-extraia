@@ -34,7 +34,7 @@ const MIGRACOES = ["0001_pagamento.sql", "0002_anuncios.sql", "0003_analista.sql
 interface Chamada { metodo: string; caminho: string; corpo: Record<string, string> }
 
 /** Meta falsa: devolve ids em sequência e guarda cada chamada. `videoPronto` decide o status do processamento. */
-function metaFalsa(opts: { videoPronto?: () => boolean; semInstagram?: boolean; erroEm?: string; recusaInicio?: boolean } = {}) {
+function metaFalsa(opts: { videoPronto?: () => boolean; semInstagram?: boolean; erroEm?: string; recusaInicio?: boolean; conta?: Record<string, unknown> } = {}) {
   const chamadas: Chamada[] = [];
   let n = 0;
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -49,6 +49,7 @@ function metaFalsa(opts: { videoPronto?: () => boolean; semInstagram?: boolean; 
     n += 1;
     if (opts.erroEm && caminho.startsWith(opts.erroEm) && metodo === "POST") return resp({ error: { message: "Invalid parameter", code: 100, error_subcode: 1487, error_user_msg: "Mensagem de teste" } }, 400);
     if (opts.recusaInicio && corpo.start_time && !caminho.startsWith("act_")) return resp({ error: { message: "Start time can't be changed", code: 100 } }, 400);
+    if (caminho.startsWith("act_123?fields=")) return resp({ id: "act_123", name: "Glowhaven Ads", currency: "BRL", account_status: 1, spend_cap: "0", amount_spent: "0", ...opts.conta });
     if (caminho.startsWith("p1?fields=instagram_business_account")) return resp(opts.semInstagram ? { id: "p1" } : { instagram_business_account: { id: "ig1" }, id: "p1" });
     if (caminho.startsWith("act_123/instagram_accounts")) return resp({ data: opts.semInstagram ? [] : [{ id: "ig1" }] });
     if (caminho.startsWith("search?")) {
@@ -120,11 +121,11 @@ test("montar cria as 3 campanhas PAUSADAS: Tráfego, orçamento total de R$ 54, 
   assert.equal(chamadas.filter((c) => c.corpo.status === "ACTIVE").length, 0, "nada é ativado ao montar");
   assert.equal(posts(chamadas, "act_123/advideos").length, 2);
 
-  // rodar de novo não cria nada
+  // rodar de novo não cria nada (só relê a conta)
   const antes = chamadas.length;
   const r2 = await montarTeste(env, fetchFn, AGORA);
   assert.equal(r2.ok, true);
-  assert.equal(chamadas.length, antes);
+  assert.equal(chamadas.slice(antes).filter((c) => c.metodo === "POST").length, 0);
   const res = await resumoTeste(env.DB, AGORA);
   assert.equal(res.pronto_para_ativar, true);
   assert.equal(res.maximo_cents, 16_200);
@@ -230,6 +231,36 @@ test("ativar: se a Meta não deixar mudar o começo, muda só o fim e liga igual
   assert.equal(m2.chamadas.slice(n1).filter((c) => c.metodo === "POST" && c.corpo.status === "ACTIVE").length, 0, "sem datas certas, nada é ligado");
   assert.equal((outro.sqlite.prepare("SELECT COUNT(*) AS n FROM teste_ap WHERE status = 'erro'").get() as { n: number }).n, 3);
   assert.equal((sqlite.prepare("SELECT COUNT(*) AS n FROM teste_ap WHERE status = 'ativo'").get() as { n: number }).n, 3, "no primeiro caso as 3 ficaram no ar");
+});
+
+test("conta em outra moeda ou desativada: não monta nada; limite de gastos curto: monta e avisa", async () => {
+  const dolar = metaFalsa({ conta: { currency: "USD" } });
+  const r1 = await montarTeste(ambiente().env, dolar.fetchFn, AGORA);
+  assert.equal(r1.ok, false);
+  assert.match(r1.mensagem, /USD/);
+  assert.equal(dolar.chamadas.filter((c) => c.metodo === "POST").length, 0);
+
+  const parada = metaFalsa({ conta: { account_status: 2 } });
+  const r2 = await montarTeste(ambiente().env, parada.fetchFn, AGORA);
+  assert.equal(r2.ok, false);
+  assert.match(r2.mensagem, /não está ativa/);
+  assert.equal(parada.chamadas.filter((c) => c.metodo === "POST").length, 0);
+
+  // limite de R$ 165 com R$ 74,27 já usados: sobra R$ 90,73, menos que os R$ 162 do teste
+  const { env } = ambiente();
+  const curta = metaFalsa({ conta: { spend_cap: "16500", amount_spent: "7427" } });
+  const r3 = await montarTeste(env, curta.fetchFn, AGORA);
+  assert.equal(r3.ok, true);
+  assert.match(r3.mensagem, /PAUSADAS/);
+  assert.match(r3.mensagem, /só deixa gastar mais R\$ 90,73/);
+  const r4 = await ativarTeste(env, "pode ativar", "vitor", curta.fetchFn, AGORA);
+  assert.equal(r4.ok, true);
+  assert.match(r4.mensagem, /R\$ 90,73/);
+
+  // limite folgado: sem aviso
+  const folga = metaFalsa({ conta: { spend_cap: "50000", amount_spent: "7427" } });
+  const r5 = await montarTeste(ambiente().env, folga.fetchFn, AGORA);
+  assert.doesNotMatch(r5.mensagem, /Atenção/);
 });
 
 test("pausar pausa as 3 campanhas e deixa pronto para ativar de novo", async () => {

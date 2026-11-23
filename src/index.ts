@@ -74,6 +74,8 @@ export interface Env {
   META_AD_ACCOUNT_ID?: string;
   META_PAGE_ID?: string;
   META_IG_USER_ID?: string;
+  /** Conta de anúncios dividida com outro negócio: o time só vê as campanhas cujo nome começa com isto. */
+  META_CAMPANHA_PREFIXO?: string;
   META_ADSET_CRIADOR_ID?: string;
   // Meta: eventos (API de Conversões)
   META_CAPI_ATIVO?: string;

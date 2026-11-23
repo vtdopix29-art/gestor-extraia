@@ -16,7 +16,7 @@
 import { META_API_VERSAO } from "./meta_versao.ts";
 import { APRIMORAMENTOS } from "./agentes/criador.ts";
 import { gravarEstado } from "./agentes/gestor.ts";
-import { varrerGasto } from "./anuncios.ts";
+import { campanhaDoNegocio, varrerGasto } from "./anuncios.ts";
 import { nowIso } from "./util.ts";
 
 export interface TesteEnv {
@@ -27,6 +27,8 @@ export interface TesteEnv {
   META_AD_ACCOUNT_ID?: string;
   META_PAGE_ID?: string;
   META_IG_USER_ID?: string;
+  /** Conta dividida: as campanhas do teste começam com NOME_CAMPANHA, que precisa começar com este prefixo. */
+  META_CAMPANHA_PREFIXO?: string;
   /** Só para testes: espera entre as consultas do processamento do vídeo. */
   META_VIDEO_ESPERA_MS?: string;
 }
@@ -139,6 +141,45 @@ async function chamarMeta(env: TesteEnv, metodo: "GET" | "POST", caminho: string
   let json: Record<string, unknown> = {};
   try { json = JSON.parse(texto) as Record<string, unknown>; } catch { json = {}; }
   return { ok: res.ok, status: res.status, json, texto: texto.slice(0, 1000) };
+}
+
+export interface ContaMeta {
+  nome: string;
+  moeda: string;
+  /** 1 = ativa; 9 = em período de carência (ainda entrega). */
+  status: number;
+  /** Limite de gastos da conta em centavos (0 = sem limite) e quanto já contou para ele. */
+  limite_cents: number;
+  gasto_no_limite_cents: number;
+  /** Quanto o limite ainda deixa gastar (null = sem limite). */
+  sobra_cents: number | null;
+}
+
+/** Dados da conta que mudam o teste: moeda (o orçamento é em centavos de real), status e limite de gastos. */
+export async function lerConta(env: TesteEnv, fetchFn: typeof fetch): Promise<{ ok: true; conta: ContaMeta } | { ok: false; erro: string }> {
+  const r = await chamarMeta(env, "GET", `act_${env.META_AD_ACCOUNT_ID}?fields=name,currency,account_status,spend_cap,amount_spent`, null, fetchFn);
+  if (!r.ok) return { ok: false, erro: `conta: ${erroMeta(r)}` };
+  const limite = Math.round(Number(r.json.spend_cap ?? 0)) || 0;
+  const gasto = Math.round(Number(r.json.amount_spent ?? 0)) || 0;
+  return {
+    ok: true,
+    conta: {
+      nome: String(r.json.name ?? env.META_AD_ACCOUNT_ID),
+      moeda: String(r.json.currency ?? ""),
+      status: Number(r.json.account_status ?? 0),
+      limite_cents: limite,
+      gasto_no_limite_cents: gasto,
+      sobra_cents: limite > 0 ? Math.max(0, limite - gasto) : null,
+    },
+  };
+}
+
+const reaisTxt = (c: number): string => `R$ ${(c / 100).toFixed(2).replace(".", ",")}`;
+
+/** Aviso quando o limite de gastos da conta para o teste antes do fim (não impede: o limite é uma trava a mais). */
+export function avisoLimite(c: ContaMeta): string | null {
+  if (c.sobra_cents == null || c.sobra_cents >= ORCAMENTO_TOTAL_CENTS * CRIATIVOS_TESTE.length) return null;
+  return `Atenção: o limite de gastos da conta "${c.nome}" (${reaisTxt(c.limite_cents)}, já usou ${reaisTxt(c.gasto_no_limite_cents)}) só deixa gastar mais ${reaisTxt(c.sobra_cents)}. O teste para quando chegar nele, antes dos ${reaisTxt(ORCAMENTO_TOTAL_CENTS * CRIATIVOS_TESTE.length)}.`;
 }
 
 /** Mensagem curta do erro da Meta (o texto para o usuário, quando ela manda, e os códigos). */
@@ -272,12 +313,18 @@ function faltaConfig(env: TesteEnv): string | null {
 export async function montarTeste(env: TesteEnv, fetchFn: typeof fetch = fetch, agora = new Date(), tentativasVideo = 10): Promise<ResultadoMontar> {
   const falta = faltaConfig(env);
   if (falta) return { ok: false, mensagem: `Não montei nada: ${falta}.`, detalhes: [] };
+  if (!campanhaDoNegocio(env, NOME_CAMPANHA)) return { ok: false, mensagem: `Não montei nada: o nome das campanhas ("${NOME_CAMPANHA}") não começa com META_CAMPANHA_PREFIXO, e o time não as veria.`, detalhes: [] };
+  const lida = await lerConta(env, fetchFn);
+  if (!lida.ok) return { ok: false, mensagem: `Não montei nada: não consegui ler a conta de anúncios (${lida.erro}).`, detalhes: [] };
+  if (lida.conta.moeda !== "BRL") return { ok: false, mensagem: `Não montei nada: a conta "${lida.conta.nome}" está em ${lida.conta.moeda || "moeda desconhecida"}, e o orçamento do teste é em reais.`, detalhes: [] };
+  if (lida.conta.status !== 1 && lida.conta.status !== 9) return { ok: false, mensagem: `Não montei nada: a conta "${lida.conta.nome}" não está ativa (status ${lida.conta.status} na Meta).`, detalhes: [] };
+  const aviso = avisoLimite(lida.conta);
   for (const c of CRIATIVOS_TESTE) await env.DB.prepare("INSERT OR IGNORE INTO teste_ap (chave, nome, status, atualizado_em) VALUES (?1, ?2, 'novo', ?3)").bind(c.chave, c.nome, nowIso()).run();
   const linhas = new Map((await lerLinhas(env.DB)).map((l) => [l.chave, l]));
   if ([...linhas.values()].some((l) => l.status === "ativo")) return { ok: false, mensagem: "O teste já está ativo; não mexi em nada.", detalhes: [] };
 
   const precisaCriar = [...linhas.values()].some((l) => !l.anuncio_id);
-  if (!precisaCriar) return { ok: true, mensagem: "As 3 campanhas já estão montadas e pausadas.", detalhes: [...linhas.values()].map((l) => ({ chave: l.chave, status: l.status, nota: "pronta" })) };
+  if (!precisaCriar) return { ok: true, mensagem: `As 3 campanhas já estão montadas e pausadas.${aviso ? ` ${aviso}` : ""}`, detalhes: [...linhas.values()].map((l) => ({ chave: l.chave, status: l.status, nota: "pronta" })) };
 
   const ig = [...linhas.values()].find((l) => l.instagram_id)?.instagram_id ?? (await perfilInstagram(env, fetchFn));
   if (!ig) return { ok: false, mensagem: "Não montei nada: não achei o Instagram @atendimento.pronto ligado à página nem à conta de anúncios. Ligue o perfil à página (Instagram > Editar perfil > Página) e dê ao usuário do sistema acesso ao perfil.", detalhes: [] };
@@ -380,9 +427,10 @@ export async function montarTeste(env: TesteEnv, fetchFn: typeof fetch = fetch, 
   const prontas = finais.filter((l) => l.status === "pausado").length;
   const erros = finais.filter((l) => l.status === "erro").length;
   const esperando = finais.filter((l) => l.status === "aguardando_video").length;
-  const mensagem = prontas === CRIATIVOS_TESTE.length
+  const base = prontas === CRIATIVOS_TESTE.length
     ? "As 3 campanhas estão montadas e PAUSADAS. Nada gasta até o \"pode ativar\"."
     : `${prontas} de ${CRIATIVOS_TESTE.length} montadas e pausadas${esperando ? `, ${esperando} esperando a Meta processar o vídeo` : ""}${erros ? `, ${erros} com erro (veja abaixo)` : ""}.`;
+  const mensagem = aviso ? `${base} ${aviso}` : base;
   return { ok: erros === 0, mensagem, detalhes };
 }
 
@@ -407,6 +455,10 @@ export async function ativarTeste(env: TesteEnv, frase: string, quem: string, fe
   if (linhas.length !== CRIATIVOS_TESTE.length || linhas.some((l) => l.status !== "pausado" || !l.anuncio_id)) {
     return { ok: false, mensagem: "Não ativei: as 3 campanhas precisam estar montadas e pausadas antes.", detalhes: linhas.map((l) => ({ chave: l.chave, status: l.status, nota: l.erro ?? "" })) };
   }
+  const lida = await lerConta(env, fetchFn);
+  if (!lida.ok) return { ok: false, mensagem: `Não ativei: não consegui ler a conta de anúncios (${lida.erro}).`, detalhes: [] };
+  if (lida.conta.moeda !== "BRL") return { ok: false, mensagem: `Não ativei: a conta está em ${lida.conta.moeda || "moeda desconhecida"}, e o orçamento do teste é em reais.`, detalhes: [] };
+  const aviso = avisoLimite(lida.conta);
   const inicio = new Date(agora.getTime() + 2 * 60_000);
   const fim = new Date(inicio.getTime() + DIAS_TESTE * 24 * 3600_000);
   const detalhes: ResultadoAtivar["detalhes"] = [];
@@ -444,9 +496,10 @@ export async function ativarTeste(env: TesteEnv, frase: string, quem: string, fe
     await gravarEstado(env.DB, "publicos", 0, false, por);
     await varrerGasto(env, fetchFn, agora).catch(() => null);
   }
-  const mensagem = ativos === linhas.length
+  const base = ativos === linhas.length
     ? `Teste ativado: começa em 2 minutos e para sozinho em 3 dias. Máximo R$ ${(ORCAMENTO_TOTAL_CENTS * linhas.length / 100).toFixed(2).replace(".", ",")} mais o imposto da Meta.`
     : `Ativei ${ativos} de ${linhas.length}. Veja os erros abaixo.`;
+  const mensagem = aviso && ativos > 0 ? `${base} ${aviso}` : base;
   return { ok: ativos === linhas.length, mensagem, inicio: inicio.toISOString(), fim: fim.toISOString(), detalhes };
 }
 

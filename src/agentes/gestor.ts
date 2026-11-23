@@ -9,7 +9,7 @@
  *   parado (gestor ou todos) → não faz nada e diz por quê
  */
 import { FREQUENCIA_DIAS, TETO_DIARIO_CENTS, lerCampanhas } from "../analista.ts";
-import { diaBrt } from "../anuncios.ts";
+import { campanhaDoNegocio, diaBrt, prefixoCampanha } from "../anuncios.ts";
 import { addDays, nowIso } from "../util.ts";
 import { atualizarCampanhaMeta } from "./meta_api.ts";
 import type { MetaApiEnv } from "./meta_api.ts";
@@ -19,6 +19,8 @@ export const REVERSAO_PIORA_PCT = 30;
 
 export interface GestorEnv extends MetaApiEnv {
   DB: D1Database;
+  /** Conta dividida com outro negócio: só executa em campanhas cujo nome começa com isto. */
+  META_CAMPANHA_PREFIXO?: string;
 }
 
 export interface EstadoAgente {
@@ -121,6 +123,8 @@ export async function rodarGestor(env: GestorEnv, fetchFn: typeof fetch = fetch,
       if (rec) { await marcar(env.DB, a.id, "recusada", { recusa: `frequencia: já executada em ${rec}` }); out.recusadas += 1; out.detalhes.push({ id: a.id, alvo, tipo: a.tipo, status: "recusada", nota: "frequencia" }); continue; }
     }
     const c = porId.get(a.alvo_id);
+    // conta dividida: nunca mexe em campanha de outro negócio, venha a ação de onde vier
+    if (prefixoCampanha(env) && !campanhaDoNegocio(env, c?.campanha ?? a.alvo_nome)) { await marcar(env.DB, a.id, "recusada", { recusa: "conta dividida: campanha de outro negócio" }); out.recusadas += 1; out.detalhes.push({ id: a.id, alvo, tipo: a.tipo, status: "recusada", nota: "outro negócio" }); continue; }
     const orcAtual = c?.orcamento_diario_cents ?? a.valor_anterior_cents ?? 0;
     const delta = m.status === "ACTIVE" ? orcAtual : m.status === "PAUSED" ? -orcAtual : m.daily_budget != null ? m.daily_budget - orcAtual : 0;
     if (delta > 0 && orcamentoAtivo + delta > TETO_DIARIO_CENTS) { await marcar(env.DB, a.id, "recusada", { recusa: `teto: orçamento ativo iria a ${orcamentoAtivo + delta}` }); out.recusadas += 1; out.detalhes.push({ id: a.id, alvo, tipo: a.tipo, status: "recusada", nota: "teto" }); continue; }

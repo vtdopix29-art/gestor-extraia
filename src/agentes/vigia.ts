@@ -11,7 +11,7 @@
  */
 import { META_API_VERSAO } from "../meta_versao.ts";
 import { TETO_DIARIO_CENTS } from "../analista.ts";
-import { diaBrt } from "../anuncios.ts";
+import { campanhaDoNegocio, diaBrt, prefixoCampanha } from "../anuncios.ts";
 import { addDays, nowIso } from "../util.ts";
 
 export const VIGIA_TETO_DIA_PCT = 105;
@@ -20,6 +20,8 @@ export interface VigiaEnv {
   DB: D1Database;
   META_ADS_TOKEN?: string;
   META_AD_ACCOUNT_ID?: string;
+  /** Conta dividida: o Vigia só olha (e só pausa) as campanhas cujo nome começa com isto. */
+  META_CAMPANHA_PREFIXO?: string;
   EMAIL?: { send(m: { to: string; from: string | { email: string; name: string }; subject: string; html: string; text: string }): Promise<{ messageId: string }> };
   EMAIL_REMETENTE?: string;
   ALERTA_EMAILS?: string;
@@ -88,17 +90,23 @@ async function getMeta(env: VigiaEnv, caminho: string, fetchFn: typeof fetch): P
 
 /** Anúncios reprovados ou com problema, ao vivo. */
 export async function anunciosComProblema(env: VigiaEnv, fetchFn: typeof fetch): Promise<Array<{ id: string; name: string; status: string; motivo: string }>> {
-  const q = new URLSearchParams({ fields: "id,name,effective_status,issues_info", limit: "200", filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ["DISAPPROVED", "WITH_ISSUES"] }]) });
+  const q = new URLSearchParams({ fields: prefixoCampanha(env) ? "id,name,effective_status,issues_info,campaign{name}" : "id,name,effective_status,issues_info", limit: "200", filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ["DISAPPROVED", "WITH_ISSUES"] }]) });
   const j = await getMeta(env, `act_${env.META_AD_ACCOUNT_ID}/ads?${q}`, fetchFn);
-  const dados = Array.isArray(j.data) ? (j.data as Array<Record<string, unknown>>) : [];
+  const dados = (Array.isArray(j.data) ? (j.data as Array<Record<string, unknown>>) : []).filter((a) => campanhaDoNegocio(env, (a.campaign as { name?: string } | undefined)?.name));
   return dados.map((a) => ({
     id: String(a.id), name: String(a.name ?? a.id), status: String(a.effective_status ?? ""),
     motivo: Array.isArray(a.issues_info) ? (a.issues_info as Array<{ error_summary?: string; error_message?: string }>).map((i) => i.error_summary ?? i.error_message ?? "").filter(Boolean).join("; ") : "",
   }));
 }
 
-/** Gasto da conta hoje, em centavos. */
+/** Gasto de hoje, em centavos: da conta inteira ou, numa conta dividida, só das campanhas deste negócio. */
 export async function gastoHoje(env: VigiaEnv, fetchFn: typeof fetch): Promise<number> {
+  if (prefixoCampanha(env)) {
+    const q = new URLSearchParams({ level: "campaign", date_preset: "today", fields: "campaign_id,campaign_name,spend", limit: "500" });
+    const j = await getMeta(env, `act_${env.META_AD_ACCOUNT_ID}/insights?${q}`, fetchFn);
+    const dados = Array.isArray(j.data) ? (j.data as Array<{ campaign_name?: string; spend?: string }>) : [];
+    return dados.filter((d) => campanhaDoNegocio(env, d.campaign_name)).reduce((s, d) => s + (Math.round(Number(d.spend ?? 0) * 100) || 0), 0);
+  }
   const j = await getMeta(env, `act_${env.META_AD_ACCOUNT_ID}/insights?date_preset=today&fields=spend`, fetchFn);
   const dados = Array.isArray(j.data) ? (j.data as Array<{ spend?: string }>) : [];
   return Math.round(Number(dados[0]?.spend ?? 0) * 100) || 0;
@@ -131,7 +139,7 @@ export async function rodarVigia(env: VigiaEnv, modo: "horario" | "completo", ni
       const gasto = await gastoHoje(env, fetchFn);
       const limite = Math.round(TETO_DIARIO_CENTS * VIGIA_TETO_DIA_PCT / 100);
       if (gasto > limite) {
-        const ativas = await campanhasAtivas(env.DB);
+        const ativas = (await campanhasAtivas(env.DB)).filter((c) => campanhaDoNegocio(env, c.campanha));
         let enfileiradas = 0;
         for (const c of ativas) {
           const ja = await env.DB.prepare("SELECT id FROM ads_acoes WHERE dia = ?1 AND origem = 'vigia' AND alvo_id = ?2 AND tipo = 'pausar'").bind(dia, c.campanha_id).first();
@@ -151,7 +159,7 @@ export async function rodarVigia(env: VigiaEnv, modo: "horario" | "completo", ni
   if (modo === "completo") {
     // 3. campanha ativa que gastou zero ontem
     const ontem = diaBrt(addDays(agora, -1));
-    for (const c of await campanhasAtivas(env.DB)) {
+    for (const c of (await campanhasAtivas(env.DB)).filter((x) => campanhaDoNegocio(env, x.campanha))) {
       const g = await env.DB.prepare("SELECT gasto_cents FROM ads_gasto_diario WHERE dia = ?1 AND campanha_id = ?2").bind(ontem, c.campanha_id).first<{ gasto_cents: number }>();
       if (!g || n(g.gasto_cents) === 0) await novo({ chave: `sem_gasto:${c.campanha_id}`, gravidade: "aviso", titulo: `Campanha ativa sem gasto ontem: ${c.campanha}`, texto: "Pode ser entrega travada, cobrança recusada, anúncio em análise ou orçamento no conjunto. Vale abrir o Gerenciador.", acao: null });
     }

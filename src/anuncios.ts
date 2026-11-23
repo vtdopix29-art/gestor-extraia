@@ -18,6 +18,23 @@ export interface AnunciosEnv {
   DB: D1Database;
   META_ADS_TOKEN?: string;
   META_AD_ACCOUNT_ID?: string;
+  /**
+   * Conta de anúncios dividida com outro negócio: só as campanhas cujo nome começa com isto entram no sistema (coleta,
+   * Vigia, Analista, Gestor). Vazio = a conta inteira.
+   */
+  META_CAMPANHA_PREFIXO?: string;
+}
+
+/** Prefixo das campanhas deste negócio numa conta dividida ("" = a conta inteira). */
+export function prefixoCampanha(env: { META_CAMPANHA_PREFIXO?: string }): string {
+  return (env.META_CAMPANHA_PREFIXO ?? "").normalize("NFC").trim();
+}
+
+/** A campanha é deste negócio? Sem prefixo, todas são. */
+export function campanhaDoNegocio(env: { META_CAMPANHA_PREFIXO?: string }, nome: string | null | undefined): boolean {
+  const p = prefixoCampanha(env);
+  if (!p) return true;
+  return typeof nome === "string" && nome.normalize("NFC").trim().startsWith(p);
 }
 
 export interface Campanha {
@@ -309,12 +326,20 @@ export async function varrerGasto(
   const out: { meta: { linhas: number; campanhas: number; anuncios?: number; linhas_anuncio?: number; erro_anuncios?: string } | { erro: string } | null } = { meta: null };
   if (metaGastoAtivo(env)) {
     try {
-      const linhas = await gravarGasto(env.DB, await coletarMeta(env, de, ate, fetchFn));
-      const campanhas = await gravarCampanhas(env.DB, await coletarCampanhasMeta(env, fetchFn));
+      // conta dividida (META_CAMPANHA_PREFIXO): só entram as campanhas deste negócio, e com elas os anúncios delas
+      const dividida = prefixoCampanha(env) !== "";
+      const gastoConta = await coletarMeta(env, de, ate, fetchFn);
+      const lista = (await coletarCampanhasMeta(env, fetchFn)).filter((c) => campanhaDoNegocio(env, c.campanha));
+      const ids = new Set(lista.map((c) => c.campanha_id));
+      const linhas = await gravarGasto(env.DB, gastoConta.filter((l) => ids.has(l.campanha_id) || campanhaDoNegocio(env, l.campanha)));
+      const campanhas = await gravarCampanhas(env.DB, lista);
       out.meta = { linhas, campanhas };
       // por anúncio: texto do criativo e gasto diário (falha aqui não derruba a coleta por campanha)
       try {
-        const r = await gravarAnuncios(env.DB, await coletarAnunciosMeta(env, fetchFn), await coletarAnuncioDiarioMeta(env, de, ate, fetchFn));
+        const anuncios = (await coletarAnunciosMeta(env, fetchFn)).filter((a) => !dividida || (a.campanha_id != null && ids.has(a.campanha_id)));
+        const idsAnuncio = new Set(anuncios.map((a) => a.anuncio_id));
+        const diario = (await coletarAnuncioDiarioMeta(env, de, ate, fetchFn)).filter((l) => !dividida || idsAnuncio.has(l.anuncio_id));
+        const r = await gravarAnuncios(env.DB, anuncios, diario);
         out.meta.anuncios = r.anuncios;
         out.meta.linhas_anuncio = r.linhas;
       } catch (e) {

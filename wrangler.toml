@@ -43,8 +43,13 @@ enabled = true
 [vars]
 # Endereço público do Worker.
 APP_URL = "https://gestor-atendimento.vtdopix29.workers.dev"
-# Meta: preenchidos quando a conta de anúncios "Atendimento Pronto" e a página existirem.
-META_AD_ACCOUNT_ID = ""
+# Meta: por decisão do Vitor (23/11), o teste roda na conta de anúncios que ele já usa na Glowhaven ("Glowhaven Ads"),
+# que já tem pagamento e histórico. A conta é DIVIDIDA: o time só enxerga e só mexe nas campanhas cujo nome começa com
+# META_CAMPANHA_PREFIXO (as do teste nascem "AP · Teste BF · ..."). As campanhas da Glowhaven ficam de fora da coleta,
+# do Vigia, do Analista e do Gestor. Mais tarde o Atendimento Pronto ganha conta própria: troca o id e pronto.
+META_AD_ACCOUNT_ID = "936746025890958"
+META_CAMPANHA_PREFIXO = "AP ·"
+# Página do Facebook do Atendimento Pronto (com o @atendimento.pronto ligado). A conta só tem a página da Glowhaven.
 META_PAGE_ID = ""
 # Perfil do Instagram dos anúncios (@atendimento.pronto). Vazio = o Worker pergunta à Meta qual perfil está ligado à página.
 META_IG_USER_ID = ""
