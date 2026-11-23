@@ -49,10 +49,12 @@ Pelo terminal (com `ADMIN_TOKEN`): `GET /admin/teste`, `POST /admin/teste/montar
 
 ## Para ligar (uma vez)
 
-1. Cloudflare: criar o banco D1 `gestor-atendimento` (o id vai em `wrangler.toml`) e o bucket R2
+1. Cloudflare (feito em 23/11): banco D1 `gestor-atendimento` (id no `wrangler.toml`) e bucket R2
    `gestor-atendimento-criativos`.
-2. Criar o Worker pelo painel da Cloudflare a partir deste repositório, ramo `atendimento-pronto`, com o comando de
-   publicação `npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`. Só com o "pode publicar".
+2. Worker `gestor-atendimento` (feito em 23/11, com o "pode publicar" do Vitor): ligado a este repositório pelo
+   Workers Builds, **ramo de produção `atendimento-pronto`**, comando de publicação
+   `npx wrangler d1 migrations apply DB --remote && npx wrangler deploy`, **builds de prévia desligados** (assim um push
+   no `main` nunca publica nada neste Worker). Cada push neste ramo publica de novo: só com o "pode publicar".
 3. Segredos no painel do Worker: `ADMIN_TOKEN` e `LOGIN_SEGREDO` (senhas longas aleatórias), `META_ADS_TOKEN` (token
    de um usuário do sistema do portfólio que tem a conta "Glowhaven Ads", com `ads_read` e `ads_management`, e com
    acesso à conta, à página do Atendimento Pronto e ao Instagram @atendimento.pronto). `OPENROUTER_API_KEY` é
